@@ -45,10 +45,20 @@ body {
 .banner {
   margin: 0 0 1rem;
   padding: 0.75rem 1rem;
-  border: 1px solid #e6c6c6;
+  border: 1px solid transparent;
   border-radius: 12px;
+}
+
+.banner-alert {
+  border-color: #e6c6c6;
   background: #fdf6f6;
   color: var(--danger);
+}
+
+.banner-info {
+  border-color: #c9ddd2;
+  background: #f4faf6;
+  color: var(--accent);
 }
 
 .card {

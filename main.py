@@ -81,10 +81,19 @@ def sign_in_error_message(exc: OAuthError) -> str:
 async def home(request: Request):
     session_id = request.cookies.get("session_id")
     user = get_session(session_id)
-    error = request.session.pop("sign_in_error", None)
+    if err_msg := request.session.pop("err_msg", None):
+        banner = err_msg
+        banner_role = "alert"
+    else:
+        if info_msg := request.session.pop("info_msg", None):
+            banner = info_msg
+            banner_role = "info"
+        else:
+            banner = None
+            banner_role = None
 
     return templates.TemplateResponse(
-        request, "home.j2", {"user": user, "error": error}
+        request, "home.j2", {"user": user, "banner": banner, "banner_role": banner_role}
     )
 
 
@@ -129,7 +138,7 @@ async def auth_callback(request: Request):
     try:
         token = await oauth.entra.authorize_access_token(request)
     except OAuthError as exc:
-        request.session["sign_in_error"] = sign_in_error_message(exc)
+        request.session["err_msg"] = sign_in_error_message(exc)
         return RedirectResponse("/", status_code=302)
 
     # Authlib validates the OIDC ID token and provides userinfo.
@@ -199,6 +208,8 @@ def clear_local_session(
 
 @app.get("/logout")
 async def logout(request: Request):
+    request.session.clear()
+    request.session["info_msg"] = "You have been logged out"
     return clear_local_session(request, RedirectResponse("/", status_code=302))
 
 
@@ -219,11 +230,9 @@ async def logout_entra(request: Request):
 
 
 @app.get("/logged-out")
-async def logged_out():
-    return {
-        "message": "You have been logged out",
-        "authenticated": False,
-    }
+async def logged_out(request: Request):
+    request.session["info_msg"] = "You have been logged out"
+    return RedirectResponse("/")
 
 
 @app.get("/health")
