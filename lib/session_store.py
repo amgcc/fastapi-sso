@@ -9,31 +9,34 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent / "sessions.db"
 
 
-def get_connection():
+def get_connection() -> sqlite3.Connection:
+    """Open a SQLite connection to the session database."""
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def initialize_database():
+CREATE_SESSIONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        user_oid TEXT NOT NULL,
+        user_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    )
+"""
+
+CREATE_SESSIONS_USER_OID_INDEX = """
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_oid
+    ON sessions(user_oid)
+"""
+
+
+def initialize_database() -> None:
+    """Create the sessions table and its index when they do not exist."""
     with get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                user_oid TEXT NOT NULL,
-                user_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )
-        """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_sessions_user_oid
-            ON sessions(user_oid)
-        """
-        )
+        conn.execute(CREATE_SESSIONS_TABLE)
+        conn.execute(CREATE_SESSIONS_USER_OID_INDEX)
 
 
 def with_role_list(user: dict) -> dict:
@@ -47,6 +50,7 @@ def with_role_list(user: dict) -> dict:
 
 
 def delete_expired_sessions(conn) -> None:
+    """Delete sessions whose expiry time has passed."""
     conn.execute(
         "DELETE FROM sessions WHERE expires_at <= ?",
         (datetime.now(timezone.utc).isoformat(),),
@@ -54,6 +58,7 @@ def delete_expired_sessions(conn) -> None:
 
 
 def create_session(user: dict) -> str:
+    """Store a user for one hour and return the new session id."""
     user = with_role_list(user)
     session_id = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
@@ -80,6 +85,7 @@ def create_session(user: dict) -> str:
 
 
 def get_session(session_id: str) -> dict | None:
+    """Return the user for a session id, or None when it is missing or expired."""
     with get_connection() as conn:
         row = conn.execute(
             "SELECT user_json, expires_at FROM sessions WHERE session_id = ?",
@@ -102,6 +108,7 @@ def get_session(session_id: str) -> dict | None:
 
 
 def delete_session(session_id: str) -> None:
+    """Delete the session with this id."""
     with get_connection() as conn:
         conn.execute(
             "DELETE FROM sessions WHERE session_id = ?",
@@ -126,6 +133,7 @@ def delete_session_row(row_id: int) -> str | None:
 
 
 def list_sessions(current_session_id: str | None = None) -> list[dict]:
+    """Return active sessions, newest first, marking the caller's session."""
     with get_connection() as conn:
         delete_expired_sessions(conn)
 
@@ -147,6 +155,3 @@ def list_sessions(current_session_id: str | None = None) -> list[dict]:
             }
             for row in rows
         ]
-
-
-initialize_database()

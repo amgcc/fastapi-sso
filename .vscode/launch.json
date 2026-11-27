@@ -7,6 +7,8 @@
       "request": "launch",
       "module": "uvicorn",
       "args": [
+        "--app-dir",
+        "lib",
         "main:app",
         "--host",
         "127.0.0.1",

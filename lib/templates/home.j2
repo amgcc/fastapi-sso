@@ -30,9 +30,13 @@
         </div>
       </dl>
       <div class="actions">
-        <a class="button" href="/logout">Local logout</a>
-        <a class="button button-secondary" href="/logout/entra">Sign out of Microsoft too</a>
-        {% if "App.Admin" in user.roles %}
+        <form method="post" action="/logout">
+          <button class="button" type="submit">Local logout</button>
+        </form>
+        <form method="post" action="/logout/entra">
+          <button class="button button-secondary" type="submit">Sign out of Microsoft too</button>
+        </form>
+        {% if admin_role in user.roles %}
           <a class="button button-secondary" href="/admin/sessions">Session admin</a>
         {% endif %}
       </div>

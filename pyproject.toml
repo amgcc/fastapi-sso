@@ -19,11 +19,15 @@ dependencies = [
 dev = [
     "black~=25.11",
     "pre-commit>=4.0",
+    "pytest>=9.2.0",
 ]
 
 [tool.black]
-line-length = 88
+line-length = 100
 target-version = ["py312"]
+
+[tool.pytest.ini_options]
+pythonpath = ["lib"]
 
 [tool.uv]
 package = false

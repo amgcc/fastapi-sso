@@ -23,14 +23,14 @@ cp .env.example .env   # if present; otherwise create .env with required variabl
 uv run pre-commit install
 ```
 
-Required environment variables: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `SESSION_SECRET`.
+Required environment variables: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `SESSION_SECRET`, and `APP_BASE_URL`.
 
-Register these redirect URIs on the Entra app. They are set in `main.py`:
+`APP_BASE_URL` is the public origin of this app, with no path and no trailing slash, such as `https://login.example.com`. The app builds its Entra redirect URIs from that origin:
 
-- `https://app.alexglass.com/auth/callback`
-- `https://app.alexglass.com/logged-out`
+- `{APP_BASE_URL}/auth/callback`
+- `{APP_BASE_URL}/logged-out`
 
-The session cookies are HTTPS-only.
+Register both URIs on the Entra app registration. When `APP_BASE_URL` uses `https`, the session cookies are marked `Secure`. An `http` origin, such as `http://127.0.0.1:8000`, leaves them unset so a local demo can keep the cookies.
 
 ### Token configuration
 
@@ -45,7 +45,7 @@ The sign-in request already includes the `openid` and `profile` scopes that clai
 ## Run
 
 ```bash
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn --app-dir lib main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ## Formatting
