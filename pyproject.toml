@@ -1,0 +1,27 @@
+[project]
+name = "fastapi-sso"
+version = "0.1.0"
+description = "FastAPI SSO lab with Microsoft Entra OIDC"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "authlib>=1.3",
+    "fastapi>=0.115",
+    "itsdangerous>=2.0",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "black~=25.11",
+    "pre-commit>=4.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.uv]
+package = false
