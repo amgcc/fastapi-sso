@@ -11,7 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
-from session_store import create_session, list_sessions, get_session, delete_session
+from session_store import (
+    create_session,
+    list_sessions,
+    get_session,
+    delete_session,
+    delete_session_row,
+)
 
 load_dotenv()
 
@@ -257,21 +263,18 @@ async def admin_sessions(
     return templates.TemplateResponse(
         request,
         "sessions.j2",
-        {
-            "sessions": list_sessions(),
-            "current_session_id": request.cookies.get("session_id"),
-        },
+        {"sessions": list_sessions(request.cookies.get("session_id"))},
     )
 
 
 @app.post("/admin/sessions/delete")
 async def admin_delete_session(
     request: Request,
-    session_id: str = Form(...),
+    session_row_id: int = Form(...),
     user: dict = Depends(require_role("App.Admin")),
 ):
-    deleting_current = session_id == request.cookies.get("session_id")
-    delete_session(session_id)
+    deleted_session_id = delete_session_row(session_row_id)
+    deleting_current = deleted_session_id == request.cookies.get("session_id")
 
     if deleting_current:
         return clear_local_session(request, RedirectResponse("/", status_code=303))

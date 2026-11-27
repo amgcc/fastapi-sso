@@ -20,7 +20,7 @@
             <tr>
               <td>
                 {{ session.user.username or "" }}
-                {% if session.session_id == current_session_id %}
+                {% if session.is_current %}
                   <span class="tag">This browser</span>
                 {% endif %}
               </td>
@@ -36,7 +36,7 @@
               </td>
               <td>
                 <form method="post" action="/admin/sessions/delete">
-                  <input type="hidden" name="session_id" value="{{ session.session_id }}">
+                  <input type="hidden" name="session_row_id" value="{{ session.id }}">
                   <button class="button button-danger" type="submit">Delete</button>
                 </form>
               </td>

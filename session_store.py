@@ -109,13 +109,29 @@ def delete_session(session_id: str) -> None:
         )
 
 
-def list_sessions() -> list[dict]:
+def delete_session_row(row_id: int) -> str | None:
+    """Delete one row by its SQLite row id. Return the cookie value if a row was removed."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT session_id FROM sessions WHERE rowid = ?",
+            (row_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "DELETE FROM sessions WHERE rowid = ?",
+            (row_id,),
+        )
+        return row["session_id"]
+
+
+def list_sessions(current_session_id: str | None = None) -> list[dict]:
     with get_connection() as conn:
         delete_expired_sessions(conn)
 
         rows = conn.execute(
             """
-            SELECT session_id, user_json, created_at, expires_at
+            SELECT rowid, session_id, user_json, created_at, expires_at
             FROM sessions
             ORDER BY created_at DESC
             """
@@ -123,7 +139,8 @@ def list_sessions() -> list[dict]:
 
         return [
             {
-                "session_id": row["session_id"],
+                "id": row["rowid"],
+                "is_current": row["session_id"] == current_session_id,
                 "user": with_role_list(json.loads(row["user_json"])),
                 "created_at": datetime.fromisoformat(row["created_at"]),
                 "expires_at": datetime.fromisoformat(row["expires_at"]),
