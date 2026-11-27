@@ -14,6 +14,16 @@ uv run pre-commit install
 
 Required environment variables: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `SESSION_SECRET`.
 
+## Entra app registration
+
+Sign-out sends the ID token `login_hint` claim as `logout_hint` so Entra can end the right session without an account picker. That claim is not in the token unless you add it:
+
+1. Open the app in Microsoft Entra admin center.
+2. Go to **App registration** → **Token configuration**.
+3. Add an optional claim: token type = **ID**, claim = `login_hint`.
+
+The sign-in request already includes the `openid` and `profile` scopes that claim requires.
+
 ## Run
 
 ```bash

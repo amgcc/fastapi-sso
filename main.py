@@ -1,13 +1,16 @@
 import os
-from html import escape
+from pathlib import Path
+from urllib.parse import urlencode
 
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.middleware.sessions import SessionMiddleware
-from urllib.parse import urlencode
 from session_store import create_session, list_sessions, get_session, delete_session
 
 load_dotenv()
@@ -25,6 +28,18 @@ ENTRA_LOGOUT_ENDPOINT = (
 )
 
 app = FastAPI(title="FastAPI SSO Lab")
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).resolve().parent / "static"),
+    name="static",
+)
+templates = Jinja2Templates(
+    env=Environment(
+        loader=FileSystemLoader(Path(__file__).resolve().parent / "templates"),
+        # .j2 is outside Jinja's default HTML autoescape suffixes.
+        autoescape=select_autoescape(enabled_extensions=("html", "htm", "xml", "j2")),
+    )
+)
 
 # Signed session cookie
 app.add_middleware(
@@ -53,52 +68,24 @@ oauth.register(
 )
 
 
+def sign_in_error_message(exc: OAuthError) -> str:
+    description = (exc.description or "").strip()
+    if description:
+        return description
+    if exc.error:
+        return exc.error.replace("_", " ")
+    return "Sign-in failed."
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     session_id = request.cookies.get("session_id")
     user = get_session(session_id)
+    error = request.session.pop("sign_in_error", None)
 
-    if not user:
-        return """
-        <html>
-            <head><title>FastAPI SSO Lab</title></head>
-            <body>
-                <h1>FastAPI SSO Lab</h1>
-                <p>You are not signed in.</p>
-                <a href="/login">
-                    <button>Sign in with Microsoft</button>
-                </a>
-            </body>
-        </html>
-        """
-
-    return f"""
-    <html>
-        <head><title>FastAPI SSO Lab</title></head>
-        <body>
-            <h1>Welcome, {escape(str(user.get('name') or 'User'))}</h1>
-            <p>Username: {escape(str(user.get('username') or ''))}</p>
-            <p>Object ID: {escape(str(user.get('oid') or ''))}</p>
-            <p>Tenant ID: {escape(str(user.get('tid') or ''))}</p>
-            <p>Roles: {escape(str(user.get('roles') or []))}</p>
-
-            <hr>
-
-            <h3>Sign out</h3>
-            <a href="/logout">
-                <button>Local logout</button>
-            </a>
-
-            <a href="/logout/entra">
-                <button>Sign out of Microsoft too</button>
-            </a>
-
-            <a href="/admin/sessions">
-                <button>Session Admin</button>
-            </a>            
-        </body>
-    </html>
-    """
+    return templates.TemplateResponse(
+        request, "home.j2", {"user": user, "error": error}
+    )
 
 
 @app.get("/login")
@@ -141,8 +128,9 @@ async def profile(user: dict = Depends(get_current_user)):
 async def auth_callback(request: Request):
     try:
         token = await oauth.entra.authorize_access_token(request)
-    except OAuthError:
-        return RedirectResponse("/")
+    except OAuthError as exc:
+        request.session["sign_in_error"] = sign_in_error_message(exc)
+        return RedirectResponse("/", status_code=302)
 
     # Authlib validates the OIDC ID token and provides userinfo.
     userinfo = token.get("userinfo")
@@ -254,46 +242,30 @@ async def reports(
 
 @app.get("/admin/sessions", response_class=HTMLResponse)
 async def admin_sessions(
+    request: Request,
     user: dict = Depends(require_role("App.Admin")),
 ):
-    sessions = list_sessions()
-
-    items = "\n".join(
-        f"""
-        <li>
-            {escape(str(session['user'].get('username', '')))}
-            — {escape(session['expires_at'].isoformat())}
-
-            <form method="post" action="/admin/sessions/delete"
-                  style="display:inline">
-                <input type="hidden" name="session_id"
-                       value="{escape(session['session_id'])}">
-                <button type="submit">Delete</button>
-            </form>
-        </li>
-        """
-        for session in sessions
+    return templates.TemplateResponse(
+        request,
+        "sessions.j2",
+        {
+            "sessions": list_sessions(),
+            "current_session_id": request.cookies.get("session_id"),
+        },
     )
-
-    return f"""
-    <html>
-        <head><title>FastAPI SSO Lab - Sessions Admin</title></head>
-        <body>
-            <h1>Sessions Admin</h1>
-            <ul>
-                {items or "<li>No active sessions</li>"}
-            </ul>
-        </body>
-    </html>
-    """
 
 
 @app.post("/admin/sessions/delete")
 async def admin_delete_session(
+    request: Request,
     session_id: str = Form(...),
     user: dict = Depends(require_role("App.Admin")),
 ):
+    deleting_current = session_id == request.cookies.get("session_id")
     delete_session(session_id)
+
+    if deleting_current:
+        return clear_local_session(request, RedirectResponse("/", status_code=303))
 
     return RedirectResponse(
         "/admin/sessions",

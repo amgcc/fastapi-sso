@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}FastAPI SSO Lab{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/">FastAPI SSO Lab</a>
+    </header>
+    <main class="page">
+      {% block content %}{% endblock %}
+    </main>
+    <script>
+      document.querySelectorAll("time[datetime]").forEach((node) => {
+        const value = new Date(node.dateTime);
+        if (Number.isNaN(value.getTime())) return;
+        node.textContent = value.toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        });
+      });
+    </script>
+  </body>
+</html>

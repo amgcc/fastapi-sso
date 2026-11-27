@@ -1,0 +1,51 @@
+{% extends "base.j2" %}
+
+{% block title %}Sessions · FastAPI SSO Lab{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Sessions</h1>
+    {% if sessions %}
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Signed in</th>
+            <th>Expires</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for session in sessions %}
+            <tr>
+              <td>
+                {{ session.user.username or "" }}
+                {% if session.session_id == current_session_id %}
+                  <span class="tag">This browser</span>
+                {% endif %}
+              </td>
+              <td>
+                <time datetime="{{ session.created_at.isoformat() }}">
+                  {{ session.created_at.isoformat() }}
+                </time>
+              </td>
+              <td>
+                <time datetime="{{ session.expires_at.isoformat() }}">
+                  {{ session.expires_at.isoformat() }}
+                </time>
+              </td>
+              <td>
+                <form method="post" action="/admin/sessions/delete">
+                  <input type="hidden" name="session_id" value="{{ session.session_id }}">
+                  <button class="button button-danger" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No active sessions.</p>
+    {% endif %}
+  </section>
+{% endblock %}
