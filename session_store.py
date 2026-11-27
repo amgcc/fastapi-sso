@@ -46,6 +46,13 @@ def with_role_list(user: dict) -> dict:
     return {**user, "roles": roles}
 
 
+def delete_expired_sessions(conn) -> None:
+    conn.execute(
+        "DELETE FROM sessions WHERE expires_at <= ?",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+
+
 def create_session(user: dict) -> str:
     user = with_role_list(user)
     session_id = secrets.token_urlsafe(32)
@@ -53,6 +60,7 @@ def create_session(user: dict) -> str:
     expires_at = now + timedelta(hours=1)
 
     with get_connection() as conn:
+        delete_expired_sessions(conn)
         conn.execute(
             """
             INSERT INTO sessions
@@ -102,13 +110,8 @@ def delete_session(session_id: str) -> None:
 
 
 def list_sessions() -> list[dict]:
-    now = datetime.now(timezone.utc).isoformat()
-
     with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM sessions WHERE expires_at <= ?",
-            (now,),
-        )
+        delete_expired_sessions(conn)
 
         rows = conn.execute(
             """
@@ -127,15 +130,6 @@ def list_sessions() -> list[dict]:
             }
             for row in rows
         ]
-
-
-def delete_user_sessions(oid: str) -> int:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            "DELETE FROM sessions WHERE user_oid = ?",
-            (oid,),
-        )
-        return cursor.rowcount
 
 
 initialize_database()

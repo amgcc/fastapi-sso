@@ -1,6 +1,7 @@
 import os
 from html import escape
 
+from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -138,7 +139,10 @@ async def profile(user: dict = Depends(get_current_user)):
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request):
-    token = await oauth.entra.authorize_access_token(request)
+    try:
+        token = await oauth.entra.authorize_access_token(request)
+    except OAuthError:
+        return RedirectResponse("/")
 
     # Authlib validates the OIDC ID token and provides userinfo.
     userinfo = token.get("userinfo")
@@ -156,6 +160,7 @@ async def auth_callback(request: Request):
         "oid": userinfo.get("oid"),
         "tid": userinfo.get("tid"),
         "roles": userinfo.get("roles"),
+        "login_hint": userinfo.get("login_hint"),
     }
 
     session_id = create_session(user)
@@ -214,8 +219,13 @@ async def logout_entra(request: Request):
     """Clear the local session and sign out through Entra."""
     request.session.clear()
 
-    params = urlencode({"post_logout_redirect_uri": POST_LOGOUT_URI})
-    logout_url = f"{ENTRA_LOGOUT_ENDPOINT}?{params}"
+    user = get_session(request.cookies.get("session_id"))
+    login_hint = user.get("login_hint") if user else None
+    params = {"post_logout_redirect_uri": POST_LOGOUT_URI}
+    if isinstance(login_hint, str) and login_hint:
+        params["logout_hint"] = login_hint
+
+    logout_url = f"{ENTRA_LOGOUT_ENDPOINT}?{urlencode(params)}"
 
     return clear_local_session(request, RedirectResponse(logout_url, status_code=302))
 
