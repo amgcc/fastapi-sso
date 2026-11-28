@@ -21,6 +21,7 @@ from session_store import (
     get_session,
     initialize_database,
     list_sessions,
+    touch_session,
 )
 
 load_dotenv()
@@ -136,13 +137,16 @@ async def get_current_user(request: Request) -> dict:
 
     if not (user := get_session(session_id)):
         raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    touch_session(session_id)
+
     return user
 
 
-@app.get("/profile")
-async def profile(user: dict = Depends(get_current_user)) -> dict:
-    """Return the signed-in user."""
-    return {"message": "You are authenticated", "user": user}
+@app.get("/profile", response_class=HTMLResponse)
+async def profile(request: Request, user: dict = Depends(get_current_user)) -> HTMLResponse:
+    """Show the signed-in user's identity."""
+    return templates.TemplateResponse(request, "profile.j2", {"user": user})
 
 
 @app.get("/auth/callback")
@@ -173,6 +177,14 @@ async def auth_callback(request: Request) -> RedirectResponse:
     session_id = create_session(user)
 
     response = RedirectResponse("/", status_code=302)
+    touch_session_cookie(session_id, response)
+
+    return response
+
+
+def touch_session_cookie(session_id: str, response: RedirectResponse) -> None:
+    """Store the auto-generated session_id in a cookie."""
+
     response.set_cookie(
         key="session_id",
         value=session_id,
@@ -181,8 +193,6 @@ async def auth_callback(request: Request) -> RedirectResponse:
         samesite="lax",
         max_age=3600,
     )
-
-    return response
 
 
 def require_role(required_role: App) -> Callable[..., Awaitable[dict]]:

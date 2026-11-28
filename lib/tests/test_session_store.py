@@ -75,6 +75,55 @@ def test_create_session_ids_are_unique(store):
     assert store.get_session(second)["oid"] == "oid-2"
 
 
+def test_touch_session_extends_live_expiry_by_one_hour(store):
+    session_id = store.create_session(user())
+    other_id = store.create_session(user(oid="other"))
+    created_at = "2026-06-01T00:00:00+00:00"
+    original_expiry = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    with store.get_connection() as conn:
+        conn.execute(
+            "UPDATE sessions SET created_at = ?, expires_at = ? WHERE session_id = ?",
+            (created_at, original_expiry, session_id),
+        )
+        conn.execute(
+            "UPDATE sessions SET created_at = ?, expires_at = ? WHERE session_id = ?",
+            (created_at, original_expiry, other_id),
+        )
+
+    before = datetime.now(timezone.utc)
+    store.touch_session(session_id)
+    store.touch_session("missing")
+    after = datetime.now(timezone.utc)
+
+    with store.get_connection() as conn:
+        rows = conn.execute("SELECT session_id, created_at, expires_at FROM sessions").fetchall()
+    by_id = {row["session_id"]: row for row in rows}
+    expires_at = datetime.fromisoformat(by_id[session_id]["expires_at"])
+    assert before + timedelta(hours=1) <= expires_at <= after + timedelta(hours=1)
+    assert by_id[session_id]["created_at"] == created_at
+    assert by_id[other_id]["created_at"] == created_at
+    assert by_id[other_id]["expires_at"] == original_expiry
+
+
+def test_touch_session_leaves_expired_row_unchanged(store):
+    session_id = store.create_session(user())
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    with store.get_connection() as conn:
+        conn.execute(
+            "UPDATE sessions SET expires_at = ? WHERE session_id = ?",
+            (expired, session_id),
+        )
+
+    store.touch_session(session_id)
+
+    with store.get_connection() as conn:
+        row = conn.execute(
+            "SELECT expires_at FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    assert row["expires_at"] == expired
+
+
 def test_get_session_returns_none_for_unknown_id(store):
     assert store.get_session("missing") is None
 

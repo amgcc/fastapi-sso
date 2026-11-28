@@ -9,13 +9,6 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent / "sessions.db"
 
 
-def get_connection() -> sqlite3.Connection:
-    """Open a SQLite connection to the session database."""
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 CREATE_SESSIONS_TABLE = """
     CREATE TABLE IF NOT EXISTS sessions (
         session_id TEXT PRIMARY KEY,
@@ -30,6 +23,13 @@ CREATE_SESSIONS_USER_OID_INDEX = """
     CREATE INDEX IF NOT EXISTS idx_sessions_user_oid
     ON sessions(user_oid)
 """
+
+
+def get_connection() -> sqlite3.Connection:
+    """Open a SQLite connection to the session database."""
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def initialize_database() -> None:
@@ -51,46 +51,62 @@ def with_role_list(user: dict) -> dict:
 
 def delete_expired_sessions(conn) -> None:
     """Delete sessions whose expiry time has passed."""
-    conn.execute(
-        "DELETE FROM sessions WHERE expires_at <= ?",
-        (datetime.now(timezone.utc).isoformat(),),
-    )
+
+    q = "DELETE FROM sessions WHERE expires_at <= ?"
+    params = (datetime.now(timezone.utc).isoformat(),)
+    conn.execute(q, params)
 
 
 def create_session(user: dict) -> str:
     """Store a user for one hour and return the new session id."""
+
     user = with_role_list(user)
     session_id = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=1)
+    q = """
+        INSERT INTO sessions
+            (session_id, user_oid, user_json, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+        """
+
+    params = (
+        session_id,
+        user["oid"],
+        json.dumps(user),
+        now.isoformat(),
+        expires_at.isoformat(),
+    )
 
     with get_connection() as conn:
         delete_expired_sessions(conn)
-        conn.execute(
-            """
-            INSERT INTO sessions
-                (session_id, user_oid, user_json, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                session_id,
-                user["oid"],
-                json.dumps(user),
-                now.isoformat(),
-                expires_at.isoformat(),
-            ),
-        )
+        conn.execute(q, params)
 
     return session_id
 
 
+def touch_session(session_id: str) -> None:
+    """Extend a live session so it expires one hour from now."""
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=1)
+    q = """
+        UPDATE sessions
+        SET expires_at = ?
+        WHERE session_id = ? AND expires_at > ?
+        """
+    params = (expires_at.isoformat(), session_id, now.isoformat())
+    with get_connection() as conn:
+        conn.execute(q, params)
+        print(f"Extended session {session_id} to {expires_at}")
+
+
 def get_session(session_id: str) -> dict | None:
     """Return the user for a session id, or None when it is missing or expired."""
+
+    params = (session_id,)
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT user_json, expires_at FROM sessions WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
+        q = "SELECT user_json, expires_at FROM sessions WHERE session_id = ?"
+        row = conn.execute(q, params).fetchone()
 
         if row is None:
             return None
@@ -98,10 +114,8 @@ def get_session(session_id: str) -> dict | None:
         expires_at = datetime.fromisoformat(row["expires_at"])
 
         if datetime.now(timezone.utc) >= expires_at:
-            conn.execute(
-                "DELETE FROM sessions WHERE session_id = ?",
-                (session_id,),
-            )
+            q = "DELETE FROM sessions WHERE session_id = ?"
+            conn.execute(q, params)
             return None
 
         return with_role_list(json.loads(row["user_json"]))
@@ -110,40 +124,37 @@ def get_session(session_id: str) -> dict | None:
 def delete_session(session_id: str) -> None:
     """Delete the session with this id."""
     with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM sessions WHERE session_id = ?",
-            (session_id,),
-        )
+        q = "DELETE FROM sessions WHERE session_id = ?"
+        params = (session_id,)
+        conn.execute(q, params)
 
 
 def delete_session_row(row_id: int) -> str | None:
     """Delete one row by its SQLite row id. Return the cookie value if a row was removed."""
+
+    params = (row_id,)
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT session_id FROM sessions WHERE rowid = ?",
-            (row_id,),
-        ).fetchone()
+        q = "SELECT session_id FROM sessions WHERE rowid = ?"
+        row = conn.execute(q, params).fetchone()
         if row is None:
             return None
-        conn.execute(
-            "DELETE FROM sessions WHERE rowid = ?",
-            (row_id,),
-        )
+        q = "DELETE FROM sessions WHERE rowid = ?"
+        conn.execute(q, params)
         return row["session_id"]
 
 
 def list_sessions(current_session_id: str | None = None) -> list[dict]:
     """Return active sessions, newest first, marking the caller's session."""
+
+    q = """
+        SELECT rowid, session_id, user_json, created_at, expires_at
+        FROM sessions
+        ORDER BY created_at DESC
+        """
     with get_connection() as conn:
         delete_expired_sessions(conn)
 
-        rows = conn.execute(
-            """
-            SELECT rowid, session_id, user_json, created_at, expires_at
-            FROM sessions
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
+        rows = conn.execute(q).fetchall()
 
         return [
             {

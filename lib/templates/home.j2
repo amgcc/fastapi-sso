@@ -11,30 +11,13 @@
       <a class="button" href="/login">Sign in with Microsoft</a>
     {% else %}
       <h1>Welcome, {{ user.name or "User" }}</h1>
-      <dl class="details">
-        <div>
-          <dt>Username</dt>
-          <dd>{{ user.username or "" }}</dd>
-        </div>
-        <div>
-          <dt>Object ID</dt>
-          <dd>{{ user.oid or "" }}</dd>
-        </div>
-        <div>
-          <dt>Tenant ID</dt>
-          <dd>{{ user.tid or "" }}</dd>
-        </div>
-        <div>
-          <dt>Roles</dt>
-          <dd>{{ user.roles | join(", ") if user.roles else "None" }}</dd>
-        </div>
-      </dl>
       <div class="actions">
+        <a class="button button-secondary" href="/profile">Profile</a>
         <form method="post" action="/logout">
-          <button class="button" type="submit">Local logout</button>
+          <button class="button" type="submit">Logout</button>
         </form>
         <form method="post" action="/logout/entra">
-          <button class="button button-secondary" type="submit">Sign out of Microsoft too</button>
+          <button class="button button-secondary" type="submit">Entra Logout</button>
         </form>
         {% if admin_role in user.roles %}
           <a class="button button-secondary" href="/admin/sessions">Session admin</a>
