@@ -1,4 +1,5 @@
 import json
+import hashlib
 import secrets
 import sqlite3
 
@@ -23,6 +24,11 @@ CREATE_SESSIONS_USER_OID_INDEX = """
     CREATE INDEX IF NOT EXISTS idx_sessions_user_oid
     ON sessions(user_oid)
 """
+
+
+def hash_session_id(session_id: str) -> str:
+    """Return the SHA-256 hash of a session ID."""
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
 def get_connection() -> sqlite3.Connection:
@@ -71,7 +77,7 @@ def create_session(user: dict) -> str:
         """
 
     params = (
-        session_id,
+        hash_session_id(session_id),
         user["oid"],
         json.dumps(user),
         now.isoformat(),
@@ -94,7 +100,7 @@ def touch_session(session_id: str) -> None:
         SET expires_at = ?
         WHERE session_id = ? AND expires_at > ?
         """
-    params = (expires_at.isoformat(), session_id, now.isoformat())
+    params = (expires_at.isoformat(), hash_session_id(session_id), now.isoformat())
     with get_connection() as conn:
         conn.execute(q, params)
 
@@ -104,7 +110,7 @@ def get_session(session_id: str | None) -> dict | None:
     if not session_id:
         return None
 
-    params = (session_id,)
+    params = (hash_session_id(session_id),)
     with get_connection() as conn:
         q = "SELECT user_json, expires_at FROM sessions WHERE session_id = ?"
         row = conn.execute(q, params).fetchone()
@@ -126,12 +132,12 @@ def delete_session(session_id: str) -> None:
     """Delete the session with this id."""
     with get_connection() as conn:
         q = "DELETE FROM sessions WHERE session_id = ?"
-        params = (session_id,)
+        params = (hash_session_id(session_id),)
         conn.execute(q, params)
 
 
 def delete_session_row(row_id: int) -> str | None:
-    """Delete one row by its SQLite row id. Return the cookie value if a row was removed."""
+    """Delete one row by its SQLite row id. Return the stored session hash if a row was removed."""
 
     params = (row_id,)
     with get_connection() as conn:
@@ -147,6 +153,7 @@ def delete_session_row(row_id: int) -> str | None:
 def list_sessions(current_session_id: str | None = None) -> list[dict]:
     """Return active sessions, newest first, marking the caller's session."""
 
+    current_hash = hash_session_id(current_session_id) if current_session_id else None
     q = """
         SELECT rowid, session_id, user_json, created_at, expires_at
         FROM sessions
@@ -160,7 +167,7 @@ def list_sessions(current_session_id: str | None = None) -> list[dict]:
         return [
             {
                 "id": row["rowid"],
-                "is_current": row["session_id"] == current_session_id,
+                "is_current": row["session_id"] == current_hash,
                 "user": with_role_list(json.loads(row["user_json"])),
                 "created_at": datetime.fromisoformat(row["created_at"]),
                 "expires_at": datetime.fromisoformat(row["expires_at"]),

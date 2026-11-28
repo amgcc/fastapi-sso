@@ -22,6 +22,7 @@ from session_store import (
     create_session,
     delete_session,
     delete_session_row,
+    hash_session_id,
     get_session,
     initialize_database,
     list_sessions,
@@ -338,7 +339,10 @@ async def admin_delete_session(
     session_row_id: int = Form(...),
 ) -> RedirectResponse:
     """Delete one session by SQLite row id and redirect back."""
-    if delete_session_row(session_row_id) == request.cookies.get("session_id"):
+
+    session_id = request.cookies.get("session_id")
+    removed = delete_session_row(session_row_id)
+    if session_id and removed == hash_session_id(session_id):
         return clear_local_session(request, RedirectResponse("/", status_code=303))
 
     return RedirectResponse("/admin/sessions", status_code=303)

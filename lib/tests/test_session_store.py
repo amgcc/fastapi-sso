@@ -5,6 +5,10 @@ import pytest
 import session_store
 
 
+def stored_id(session_id: str) -> str:
+    return session_store.hash_session_id(session_id)
+
+
 def user(**overrides) -> dict:
     record = {
         "name": "Ada",
@@ -61,7 +65,7 @@ def test_create_session_stores_normalized_user_for_one_hour(store):
     with store.get_connection() as conn:
         row = conn.execute(
             "SELECT expires_at FROM sessions WHERE session_id = ?",
-            (session_id,),
+            (stored_id(session_id),),
         ).fetchone()
     expires_at = datetime.fromisoformat(row["expires_at"])
     assert before + timedelta(hours=1) <= expires_at <= after + timedelta(hours=1)
@@ -83,11 +87,11 @@ def test_touch_session_extends_live_expiry_by_one_hour(store):
     with store.get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET created_at = ?, expires_at = ? WHERE session_id = ?",
-            (created_at, original_expiry, session_id),
+            (created_at, original_expiry, stored_id(session_id)),
         )
         conn.execute(
             "UPDATE sessions SET created_at = ?, expires_at = ? WHERE session_id = ?",
-            (created_at, original_expiry, other_id),
+            (created_at, original_expiry, stored_id(other_id)),
         )
 
     before = datetime.now(timezone.utc)
@@ -98,11 +102,11 @@ def test_touch_session_extends_live_expiry_by_one_hour(store):
     with store.get_connection() as conn:
         rows = conn.execute("SELECT session_id, created_at, expires_at FROM sessions").fetchall()
     by_id = {row["session_id"]: row for row in rows}
-    expires_at = datetime.fromisoformat(by_id[session_id]["expires_at"])
+    expires_at = datetime.fromisoformat(by_id[stored_id(session_id)]["expires_at"])
     assert before + timedelta(hours=1) <= expires_at <= after + timedelta(hours=1)
-    assert by_id[session_id]["created_at"] == created_at
-    assert by_id[other_id]["created_at"] == created_at
-    assert by_id[other_id]["expires_at"] == original_expiry
+    assert by_id[stored_id(session_id)]["created_at"] == created_at
+    assert by_id[stored_id(other_id)]["created_at"] == created_at
+    assert by_id[stored_id(other_id)]["expires_at"] == original_expiry
 
 
 def test_touch_session_leaves_expired_row_unchanged(store):
@@ -111,7 +115,7 @@ def test_touch_session_leaves_expired_row_unchanged(store):
     with store.get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET expires_at = ? WHERE session_id = ?",
-            (expired, session_id),
+            (expired, stored_id(session_id)),
         )
 
     store.touch_session(session_id)
@@ -119,7 +123,7 @@ def test_touch_session_leaves_expired_row_unchanged(store):
     with store.get_connection() as conn:
         row = conn.execute(
             "SELECT expires_at FROM sessions WHERE session_id = ?",
-            (session_id,),
+            (stored_id(session_id),),
         ).fetchone()
     assert row["expires_at"] == expired
 
@@ -134,14 +138,14 @@ def test_get_session_deletes_expired_row(store):
     with store.get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET expires_at = ? WHERE session_id = ?",
-            (expired, session_id),
+            (expired, stored_id(session_id)),
         )
 
     assert store.get_session(session_id) is None
     with store.get_connection() as conn:
         row = conn.execute(
             "SELECT session_id FROM sessions WHERE session_id = ?",
-            (session_id,),
+            (stored_id(session_id),),
         ).fetchone()
     assert row is None
 
@@ -157,15 +161,15 @@ def test_delete_session_removes_only_the_named_row(store):
     assert store.get_session(kept)["oid"] == "kept"
 
 
-def test_delete_session_row_returns_cookie_value(store):
+def test_delete_session_row_returns_stored_hash(store):
     session_id = store.create_session(user())
     with store.get_connection() as conn:
         row_id = conn.execute(
             "SELECT rowid FROM sessions WHERE session_id = ?",
-            (session_id,),
+            (stored_id(session_id),),
         ).fetchone()["rowid"]
 
-    assert store.delete_session_row(row_id) == session_id
+    assert store.delete_session_row(row_id) == stored_id(session_id)
     assert store.get_session(session_id) is None
     assert store.delete_session_row(row_id) is None
 
@@ -176,11 +180,11 @@ def test_list_sessions_orders_newest_first_and_marks_current(store):
     with store.get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET created_at = ? WHERE session_id = ?",
-            ("2026-01-01T00:00:00+00:00", older),
+            ("2026-01-01T00:00:00+00:00", stored_id(older)),
         )
         conn.execute(
             "UPDATE sessions SET created_at = ? WHERE session_id = ?",
-            ("2026-06-01T00:00:00+00:00", newer),
+            ("2026-06-01T00:00:00+00:00", stored_id(newer)),
         )
 
     listed = store.list_sessions(newer)
@@ -198,7 +202,7 @@ def test_list_and_create_drop_expired_sessions(store):
     with store.get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET expires_at = ? WHERE session_id = ?",
-            (expired, expired_id),
+            (expired, stored_id(expired_id)),
         )
 
     assert [row["user"]["oid"] for row in store.list_sessions(live_id)] == ["live"]
