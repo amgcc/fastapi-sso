@@ -100,8 +100,10 @@ def touch_session(session_id: str) -> None:
         print(f"Extended session {session_id} to {expires_at}")
 
 
-def get_session(session_id: str) -> dict | None:
+def get_session(session_id: str | None) -> dict | None:
     """Return the user for a session id, or None when it is missing or expired."""
+    if not session_id:
+        return None
 
     params = (session_id,)
     with get_connection() as conn:

@@ -18,8 +18,10 @@ dependencies = [
 [dependency-groups]
 dev = [
     "black~=25.11",
+    "mypy>=2.4.1",
     "pre-commit>=4.0",
     "pytest>=9.2.0",
+    "types-authlib>=1.9.10.20261123",
 ]
 
 [tool.black]
@@ -28,6 +30,11 @@ target-version = ["py312"]
 
 [tool.pytest.ini_options]
 pythonpath = ["lib"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["lib"]
+exclude = ["lib/tests/"]
 
 [tool.uv]
 package = false

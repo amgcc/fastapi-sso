@@ -1,5 +1,7 @@
 import os
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Final
 from contextlib import asynccontextmanager
 from enum import StrEnum
 from pathlib import Path
@@ -9,10 +11,11 @@ from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from session_store import (
     create_session,
@@ -35,23 +38,26 @@ class App(StrEnum):
 
 
 # Entra directory that issues the tokens and hosts the login and logout endpoints.
-TENANT_ID = os.environ["ENTRA_TENANT_ID"]
+TENANT_ID: Final = os.environ["ENTRA_TENANT_ID"]
 # App registration this app authenticates as.
-CLIENT_ID = os.environ["ENTRA_CLIENT_ID"]
+CLIENT_ID: Final = os.environ["ENTRA_CLIENT_ID"]
 # Proves this app to Entra when exchanging the authorization code. Entra's secret, not ours.
-CLIENT_SECRET = os.environ["ENTRA_CLIENT_SECRET"]
+CLIENT_SECRET: Final = os.environ["ENTRA_CLIENT_SECRET"]
 # Signs the Starlette cookie that holds OAuth state and one-time banners.
 # The session_id cookie is a separate unsigned lookup key stored in SQLite.
-SESSION_SECRET = os.environ["SESSION_SECRET"]
+SESSION_SECRET: Final = os.environ["SESSION_SECRET"]
 
 # Public origin of this app, with no trailing slash. Redirect URIs are derived from it.
-APP_BASE_URL = os.environ["APP_BASE_URL"].rstrip("/")
-REDIRECT_URI = f"{APP_BASE_URL}/auth/callback"
-POST_LOGOUT_URI = f"{APP_BASE_URL}/logged-out"
-COOKIE_SECURE = APP_BASE_URL.startswith("https://")
+APP_BASE_URL: Final = os.environ["APP_BASE_URL"].rstrip("/")
+REDIRECT_URI: Final = f"{APP_BASE_URL}/auth/callback"
+POST_LOGOUT_URI: Final = f"{APP_BASE_URL}/logged-out"
+COOKIE_SECURE: Final = APP_BASE_URL.startswith("https://")
 
-ENTRA_ENDPOINT = f"https://login.microsoftonline.com/{TENANT_ID}"
-ENTRA_LOGOUT_ENDPOINT = f"{ENTRA_ENDPOINT}/oauth2/v2.0/logout"
+ENTRA_ENDPOINT: Final = f"https://login.microsoftonline.com/{TENANT_ID}"
+ENTRA_LOGOUT_ENDPOINT: Final = f"{ENTRA_ENDPOINT}/oauth2/v2.0/logout"
+
+# Uvicorn imports this module when the worker starts.
+STARTED_AT: Final = time.monotonic()
 
 
 @asynccontextmanager
@@ -62,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="FastAPI SSO Lab", lifespan=lifespan)
-STATIC_PATH = Path(__file__).resolve().parent / "static"
+STATIC_PATH: Final = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 templates = Jinja2Templates(
     env=Environment(
@@ -72,7 +78,33 @@ templates = Jinja2Templates(
     )
 )
 
-# Signed session cookie
+
+def touch_session_cookie(session_id: str, response: Response) -> None:
+    """Store the auto-generated session_id in a cookie."""
+
+    response.set_cookie(
+        key="session_id",
+        value=session_id,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        max_age=3600,
+    )
+
+
+class RefreshSessionCookieMiddleware(BaseHTTPMiddleware):
+    """Slide the session_id cookie after a route refreshed a live session."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        response = await call_next(request)
+        session_id = getattr(request.state, "refresh_session_id", None)
+        if isinstance(session_id, str):
+            touch_session_cookie(session_id, response)
+        return response
+
+
+# Signed session cookie. The refresh middleware is outermost so it sees the
+# response the route returned.
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -81,6 +113,7 @@ app.add_middleware(
     same_site="lax",
     https_only=COOKIE_SECURE,
 )
+app.add_middleware(RefreshSessionCookieMiddleware)
 
 # OIDC provider configuration
 oauth = OAuth()
@@ -94,20 +127,49 @@ oauth.register(
 )
 
 
-def sign_in_error_message(exc: OAuthError) -> str:
-    """Return the home-page banner text for a failed Entra callback."""
-    if description := (exc.description or "").strip():
-        return description
-    if exc.error:
-        return exc.error.replace("_", " ")
-    return "Sign-in failed."
+async def get_current_user(request: Request) -> dict | None:
+    """Return the user for the session cookie and extend that session."""
+    session_id = request.cookies.get("session_id")
+
+    if not session_id or not (user := get_session(session_id)):
+        return None
+
+    touch_session(session_id)
+    request.state.refresh_session_id = session_id
+
+    return user
+
+
+async def require_current_user(
+    request: Request, user: dict | None = Depends(get_current_user)
+) -> dict:
+    """Return the user for the session_id cookie, or raise 401."""
+
+    if user:
+        return user
+
+    if not request.cookies.get("session_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+
+def require_role(required_role: App) -> Callable[..., Awaitable[dict]]:
+    """Build a dependency that allows only users who have required_role."""
+
+    async def role_checker(user: dict = Depends(require_current_user)) -> dict:
+        """Reject the request when the signed-in user lacks required_role."""
+        if required_role not in user["roles"]:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return user
+
+    return role_checker
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> HTMLResponse:
+async def home(request: Request, user: dict | None = Depends(get_current_user)) -> HTMLResponse:
     """Show the signed-in user, or the sign-in page, plus a one-time banner."""
-    session_id = request.cookies.get("session_id")
-    user = get_session(session_id)
+
     if err_msg := request.session.pop("err_msg", None):
         banner, banner_role = err_msg, "alert"
     elif info_msg := request.session.pop("info_msg", None):
@@ -124,29 +186,25 @@ async def home(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "home.j2", context)
 
 
+@app.get("/profile", response_class=HTMLResponse)
+async def profile(request: Request, user: dict = Depends(require_current_user)) -> HTMLResponse:
+    """Show the signed-in user's identity."""
+    return templates.TemplateResponse(request, "profile.j2", {"user": user})
+
+
+def sign_in_error_message(exc: OAuthError) -> str:
+    """Return the home-page banner text for a failed Entra callback."""
+    if description := (exc.description or "").strip():
+        return description
+    if exc.error:
+        return exc.error.replace("_", " ")
+    return "Sign-in failed."
+
+
 @app.get("/login")
 async def login(request: Request) -> RedirectResponse:
     """Redirect the browser to Entra to start the authorization code flow."""
     return await oauth.entra.authorize_redirect(request, REDIRECT_URI)
-
-
-async def get_current_user(request: Request) -> dict:
-    """Return the user for the session_id cookie, or raise 401."""
-    if not (session_id := request.cookies.get("session_id")):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    if not (user := get_session(session_id)):
-        raise HTTPException(status_code=401, detail="Session expired or invalid")
-
-    touch_session(session_id)
-
-    return user
-
-
-@app.get("/profile", response_class=HTMLResponse)
-async def profile(request: Request, user: dict = Depends(get_current_user)) -> HTMLResponse:
-    """Show the signed-in user's identity."""
-    return templates.TemplateResponse(request, "profile.j2", {"user": user})
 
 
 @app.get("/auth/callback")
@@ -182,33 +240,10 @@ async def auth_callback(request: Request) -> RedirectResponse:
     return response
 
 
-def touch_session_cookie(session_id: str, response: RedirectResponse) -> None:
-    """Store the auto-generated session_id in a cookie."""
-
-    response.set_cookie(
-        key="session_id",
-        value=session_id,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=3600,
-    )
-
-
-def require_role(required_role: App) -> Callable[..., Awaitable[dict]]:
-    """Build a dependency that allows only users who have required_role."""
-
-    async def role_checker(user: dict = Depends(get_current_user)) -> dict:
-        """Reject the request when the signed-in user lacks required_role."""
-        if required_role not in user["roles"]:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return user
-
-    return role_checker
-
-
 def clear_local_session(request: Request, response: RedirectResponse) -> RedirectResponse:
     """Delete the SQLite session and the session_id cookie, then return response."""
+    # get_current_user may already have marked this request for a cookie slide.
+    request.state.refresh_session_id = None
     if session_id := request.cookies.get("session_id"):
         delete_session(session_id)
     response.delete_cookie(
@@ -254,39 +289,32 @@ async def logged_out(request: Request) -> RedirectResponse:
     return RedirectResponse("/")
 
 
-@app.get("/health")
-async def health() -> dict:
-    """Report that the process is up."""
-    return {"status": "healthy"}
-
-
-@app.get("/reports")
-async def reports(user: dict = Depends(require_role(App.Reader))) -> dict:
-    """Return a sample report for users with App.Reader."""
-    return {"message": "Report 0123"}
-
-
 @app.get("/admin/sessions", response_class=HTMLResponse)
 async def admin_sessions(
     request: Request,
-    user: dict = Depends(require_role(App.Admin)),
+    _: dict = Depends(require_role(App.Admin)),
 ) -> HTMLResponse:
     """List active sessions for users with App.Admin."""
-    return templates.TemplateResponse(
-        request,
-        "sessions.j2",
-        {"sessions": list_sessions(request.cookies.get("session_id"))},
-    )
+
+    context = {"sessions": list_sessions(request.cookies.get("session_id"))}
+    return templates.TemplateResponse(request, "sessions.j2", context)
 
 
 @app.post("/admin/sessions/delete")
 async def admin_delete_session(
     request: Request,
     session_row_id: int = Form(...),
-    user: dict = Depends(require_role(App.Admin)),
+    _: dict = Depends(require_role(App.Admin)),
 ) -> RedirectResponse:
     """Delete one session by SQLite row id and redirect back."""
     if delete_session_row(session_row_id) == request.cookies.get("session_id"):
         return clear_local_session(request, RedirectResponse("/", status_code=303))
 
     return RedirectResponse("/admin/sessions", status_code=303)
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Report that the process is up and how many seconds it has been running."""
+    uptime_seconds = int(time.monotonic() - STARTED_AT)
+    return {"status": "healthy", "uptime_seconds": uptime_seconds}
