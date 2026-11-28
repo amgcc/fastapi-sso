@@ -38,6 +38,7 @@
                 <form method="post" action="/admin/sessions/delete">
                   <input type="hidden" name="session_row_id" value="{{ session.id }}">
                   <button class="button button-danger" type="submit">Delete</button>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 </form>
               </td>
             </tr>

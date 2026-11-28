@@ -1,4 +1,5 @@
 import os
+import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Final
@@ -166,6 +167,23 @@ def require_role(required_role: App) -> Callable[..., Awaitable[dict]]:
     return role_checker
 
 
+async def require_csrf(
+    request: Request,
+    csrf_token: str = Form(...),
+) -> None:
+    expected = request.session.get("csrf_token")
+
+    if not expected or not secrets.compare_digest(csrf_token, expected):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+
+def get_csrf_token(request: Request) -> str:
+    if "csrf_token" not in request.session:
+        request.session["csrf_token"] = secrets.token_urlsafe(32)
+
+    return request.session["csrf_token"]
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, user: dict | None = Depends(get_current_user)) -> HTMLResponse:
     """Show the signed-in user, or the sign-in page, plus a one-time banner."""
@@ -182,6 +200,7 @@ async def home(request: Request, user: dict | None = Depends(get_current_user)) 
         "banner": banner,
         "banner_role": banner_role,
         "admin_role": App.Admin,
+        "csrf_token": get_csrf_token(request),
     }
     return templates.TemplateResponse(request, "home.j2", context)
 
@@ -232,6 +251,10 @@ async def auth_callback(request: Request) -> RedirectResponse:
         "login_hint": userinfo.get("login_hint"),
     }
 
+    # Start a fresh application session after successful authentication.
+    request.session.clear()
+    request.session["csrf_token"] = secrets.token_urlsafe(32)
+
     session_id = create_session(user)
 
     response = RedirectResponse("/", status_code=302)
@@ -242,10 +265,11 @@ async def auth_callback(request: Request) -> RedirectResponse:
 
 def clear_local_session(request: Request, response: RedirectResponse) -> RedirectResponse:
     """Delete the SQLite session and the session_id cookie, then return response."""
-    # get_current_user may already have marked this request for a cookie slide.
+    # wipe refresh in case get_current_user has marked this request for a cookie slide.
     request.state.refresh_session_id = None
     if session_id := request.cookies.get("session_id"):
         delete_session(session_id)
+
     response.delete_cookie(
         key="session_id",
         path="/",
@@ -253,10 +277,11 @@ def clear_local_session(request: Request, response: RedirectResponse) -> Redirec
         httponly=True,
         samesite="lax",
     )
+
     return response
 
 
-@app.post("/logout")
+@app.post("/logout", dependencies=[Depends(require_csrf)])
 async def logout(request: Request) -> RedirectResponse:
     """End the local session and redirect home with a logout banner."""
     request.session.clear()
@@ -264,7 +289,7 @@ async def logout(request: Request) -> RedirectResponse:
     return clear_local_session(request, RedirectResponse("/", status_code=303))
 
 
-@app.post("/logout/entra")
+@app.post("/logout/entra", dependencies=[Depends(require_csrf)])
 async def logout_entra(request: Request) -> RedirectResponse:
     """Clear the local session and sign out through Entra."""
     request.session.clear()
@@ -289,22 +314,28 @@ async def logged_out(request: Request) -> RedirectResponse:
     return RedirectResponse("/")
 
 
-@app.get("/admin/sessions", response_class=HTMLResponse)
-async def admin_sessions(
-    request: Request,
-    _: dict = Depends(require_role(App.Admin)),
-) -> HTMLResponse:
+@app.get(
+    "/admin/sessions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_role(App.Admin))],
+)
+async def admin_sessions(request: Request) -> HTMLResponse:
     """List active sessions for users with App.Admin."""
 
-    context = {"sessions": list_sessions(request.cookies.get("session_id"))}
+    context = {
+        "sessions": list_sessions(request.cookies.get("session_id")),
+        "csrf_token": get_csrf_token(request),
+    }
     return templates.TemplateResponse(request, "sessions.j2", context)
 
 
-@app.post("/admin/sessions/delete")
+@app.post(
+    "/admin/sessions/delete",
+    dependencies=[Depends(require_role(App.Admin)), Depends(require_csrf)],
+)
 async def admin_delete_session(
     request: Request,
     session_row_id: int = Form(...),
-    _: dict = Depends(require_role(App.Admin)),
 ) -> RedirectResponse:
     """Delete one session by SQLite row id and redirect back."""
     if delete_session_row(session_row_id) == request.cookies.get("session_id"):

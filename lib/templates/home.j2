@@ -15,9 +15,11 @@
         <a class="button button-secondary" href="/profile">Profile</a>
         <form method="post" action="/logout">
           <button class="button" type="submit">Logout</button>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         </form>
         <form method="post" action="/logout/entra">
           <button class="button button-secondary" type="submit">Entra Logout</button>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         </form>
         {% if admin_role in user.roles %}
           <a class="button button-secondary" href="/admin/sessions">Session admin</a>

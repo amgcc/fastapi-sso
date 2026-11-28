@@ -97,7 +97,6 @@ def touch_session(session_id: str) -> None:
     params = (expires_at.isoformat(), session_id, now.isoformat())
     with get_connection() as conn:
         conn.execute(q, params)
-        print(f"Extended session {session_id} to {expires_at}")
 
 
 def get_session(session_id: str | None) -> dict | None:
